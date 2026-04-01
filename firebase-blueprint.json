@@ -1,0 +1,46 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile information and physical stats.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "name": { "type": "string" },
+        "photoUrl": { "type": "string" },
+        "weight": { "type": "number" },
+        "height": { "type": "number" },
+        "age": { "type": "number" },
+        "gender": { "type": "string", "enum": ["male", "female"] },
+        "activityLevel": { "type": "number" },
+        "bmi": { "type": "number" },
+        "bmr": { "type": "number" },
+        "tdee": { "type": "number" },
+        "reminders": { "type": "object" }
+      },
+      "required": ["userId", "name", "weight", "height", "age", "gender", "activityLevel"]
+    },
+    "DailyLog": {
+      "title": "DailyLog",
+      "description": "Daily meal log for a user.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "date": { "type": "string" },
+        "meals": { "type": "array" },
+        "waterIntake": { "type": "number" }
+      },
+      "required": ["userId", "date", "meals", "waterIntake"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile document."
+    },
+    "/logs/{logId}": {
+      "schema": "DailyLog",
+      "description": "Daily meal log document."
+    }
+  }
+}

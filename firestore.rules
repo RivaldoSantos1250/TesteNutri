@@ -1,0 +1,91 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: userId
+    // Fields:
+    //   - userId: string (required)
+    //   - name: string (required, 1-50 chars)
+    //   - photoUrl: string (optional, URL)
+    //   - weight: number (required, positive)
+    //   - height: number (required, positive)
+    //   - age: number (required, positive)
+    //   - gender: string (required, 'male' or 'female')
+    //   - activityLevel: number (required, 1.2-1.9)
+    //
+    // Collection: logs
+    // Document ID: logId (format: userId_YYYY-MM-DD)
+    // Fields:
+    //   - userId: string (required)
+    //   - date: string (required, YYYY-MM-DD)
+    //   - meals: list (required)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "rivaldosantos1250@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['userId', 'name', 'weight', 'height', 'age', 'gender', 'activityLevel']) &&
+             data.userId == request.auth.uid &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 50 &&
+             data.weight is number && data.weight > 0 &&
+             data.height is number && data.height > 0 &&
+             data.age is number && data.age > 0 &&
+             data.gender in ['male', 'female'] &&
+             data.activityLevel is number && data.activityLevel >= 1.2 && data.activityLevel <= 1.9 &&
+             (!('bmi' in data) || data.bmi is number) &&
+             (!('bmr' in data) || data.bmr is number) &&
+             (!('tdee' in data) || data.tdee is number) &&
+             (!('reminders' in data) || data.reminders is map);
+    }
+
+    function isValidLog(data) {
+      return data.keys().hasAll(['userId', 'date', 'meals', 'waterIntake']) &&
+             data.userId == request.auth.uid &&
+             data.date is string && data.date.matches("^\\d{4}-\\d{2}-\\d{2}$") &&
+             data.meals is list &&
+             data.waterIntake is number && data.waterIntake >= 0;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isOwner(userId) && isValidUser(request.resource.data);
+      allow update: if isOwner(userId) && isValidUser(request.resource.data) && 
+                      request.resource.data.userId == resource.data.userId;
+      allow delete: if isAdmin();
+    }
+
+    match /logs/{logId} {
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isAuthenticated() && isValidLog(request.resource.data) && logId == request.auth.uid + "_" + request.resource.data.date;
+      allow update: if isAuthenticated() && isValidLog(request.resource.data) && 
+                      resource.data.userId == request.auth.uid &&
+                      request.resource.data.userId == resource.data.userId &&
+                      request.resource.data.date == resource.data.date;
+      allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+  }
+}
