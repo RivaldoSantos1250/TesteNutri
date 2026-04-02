@@ -559,7 +559,7 @@ export default function App() {
                   <label className="text-[10px] font-bold uppercase text-zinc-400 tracking-widest">Peso (kg)</label>
                   <input 
                     type="number" 
-                    value={profile.weight}
+                    value={profile.weight || ''}
                     onChange={(e) => setProfile({...profile, weight: Number(e.target.value)})}
                     className="w-full bg-zinc-50 border-none rounded-2xl p-4 text-sm focus:ring-2 focus:ring-zinc-900 outline-none"
                   />
@@ -568,7 +568,7 @@ export default function App() {
                   <label className="text-[10px] font-bold uppercase text-zinc-400 tracking-widest">Altura (cm)</label>
                   <input 
                     type="number" 
-                    value={profile.height}
+                    value={profile.height || ''}
                     onChange={(e) => setProfile({...profile, height: Number(e.target.value)})}
                     className="w-full bg-zinc-50 border-none rounded-2xl p-4 text-sm focus:ring-2 focus:ring-zinc-900 outline-none"
                   />
@@ -580,7 +580,7 @@ export default function App() {
                   <label className="text-[10px] font-bold uppercase text-zinc-400 tracking-widest">Idade</label>
                   <input 
                     type="number" 
-                    value={profile.age}
+                    value={profile.age || ''}
                     onChange={(e) => setProfile({...profile, age: Number(e.target.value)})}
                     className="w-full bg-zinc-50 border-none rounded-2xl p-4 text-sm focus:ring-2 focus:ring-zinc-900 outline-none"
                   />
@@ -1168,7 +1168,7 @@ export default function App() {
                       <label className="text-[10px] font-bold uppercase text-zinc-400 tracking-widest ml-1">Peso (kg)</label>
                       <input 
                         type="number" 
-                        value={profile.weight}
+                        value={profile.weight || ''}
                         onChange={(e) => setProfile({...profile, weight: Number(e.target.value)})}
                         className="w-full bg-zinc-50 border-2 border-transparent rounded-2xl p-4 text-sm font-bold focus:border-zinc-900 focus:bg-white outline-none transition-all"
                       />
@@ -1177,7 +1177,7 @@ export default function App() {
                       <label className="text-[10px] font-bold uppercase text-zinc-400 tracking-widest ml-1">Altura (cm)</label>
                       <input 
                         type="number" 
-                        value={profile.height}
+                        value={profile.height || ''}
                         onChange={(e) => setProfile({...profile, height: Number(e.target.value)})}
                         className="w-full bg-zinc-50 border-2 border-transparent rounded-2xl p-4 text-sm font-bold focus:border-zinc-900 focus:bg-white outline-none transition-all"
                       />
@@ -1186,7 +1186,7 @@ export default function App() {
                       <label className="text-[10px] font-bold uppercase text-zinc-400 tracking-widest ml-1">Idade</label>
                       <input 
                         type="number" 
-                        value={profile.age}
+                        value={profile.age || ''}
                         onChange={(e) => setProfile({...profile, age: Number(e.target.value)})}
                         className="w-full bg-zinc-50 border-2 border-transparent rounded-2xl p-4 text-sm font-bold focus:border-zinc-900 focus:bg-white outline-none transition-all"
                       />
@@ -1314,7 +1314,7 @@ export default function App() {
                           <label className="text-[10px] text-zinc-500 uppercase font-bold">Água (ml)</label>
                           <input 
                             type="number" 
-                            value={goals.waterGoal}
+                            value={goals.waterGoal || ''}
                             onChange={(e) => setGoals({...goals, waterGoal: Number(e.target.value)})}
                             className="w-full bg-zinc-800 border-none rounded-2xl p-3 text-sm font-bold focus:ring-1 focus:ring-white outline-none"
                           />
@@ -1476,7 +1476,7 @@ export default function App() {
                         <label className="text-[10px] font-bold uppercase text-zinc-400">Quantidade</label>
                         <input 
                           type="number" 
-                          value={amountInput}
+                          value={amountInput || ''}
                           onChange={(e) => setAmountInput(Number(e.target.value))}
                           className="w-full bg-white border-none rounded-2xl p-4 text-center text-lg font-bold outline-none focus:ring-2 focus:ring-zinc-900"
                         />
