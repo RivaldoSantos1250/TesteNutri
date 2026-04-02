@@ -1,4 +1,4 @@
-export type Category = 'arroz' | 'macarrão' | 'batata' | 'frango' | 'carne' | 'ovo' | 'peixe' | 'feijão' | 'lentilha' | 'legumes' | 'frutas' | 'bebidas' | 'refeição pronta';
+export type Category = 'arroz' | 'macarrão' | 'batata' | 'frango' | 'carne' | 'ovo' | 'peixe' | 'feijão' | 'lentilha' | 'legumes' | 'verduras' | 'frutas' | 'bebidas' | 'refeição pronta' | 'laticínios' | 'pães' | 'doces' | 'castanhas' | 'óleos' | 'cereais' | 'lanches' | 'outros';
 
 export type Unit = 'gramas' | 'colher' | 'concha' | 'unidade' | 'fatia';
 
@@ -34,10 +34,9 @@ export interface Meal {
 }
 
 export interface DailyLog {
-  userId: string;
   date: string; // YYYY-MM-DD
   meals: Meal[];
-  waterIntake: number; // in ml
+  water?: number; // in ml
 }
 
 export interface UserGoals {
@@ -47,16 +46,11 @@ export interface UserGoals {
   fat: number;
   tdee: number;
   waterGoal: number; // in ml
-}
-
-export interface ReminderSettings {
-  water: { enabled: boolean; interval: number }; // interval in minutes
-  meals: { enabled: boolean; times: string[] }; // HH:mm
-  protein: { enabled: boolean; target: number }; // percentage of goal
+  goalType: 'lose' | 'maintain' | 'gain';
+  dietType: 'balanced' | 'lowcarb' | 'highprotein';
 }
 
 export interface UserProfile {
-  userId: string;
   name: string;
   photoUrl?: string;
   weight: number;
@@ -64,8 +58,6 @@ export interface UserProfile {
   age: number;
   gender: 'male' | 'female';
   activityLevel: number; // 1.2 to 1.9
-  bmi?: number;
-  bmr?: number;
-  tdee?: number;
-  reminders?: ReminderSettings;
+  goalType: 'lose' | 'maintain' | 'gain';
+  dietType: 'balanced' | 'lowcarb' | 'highprotein';
 }

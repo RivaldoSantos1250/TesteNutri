@@ -1,8 +1,21 @@
 @import "tailwindcss";
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=Inter:wght@400;500;600;700&display=swap');
 
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Outfit", sans-serif;
+  
+  --radius-4xl: 2rem;
+  --radius-5xl: 2.5rem;
+  
+  --color-samsung-blue: #0376FF;
+  --color-samsung-gray: #F4F4F4;
+}
+
+@layer base {
+  body {
+    @apply bg-[#F4F7FB] text-zinc-900 antialiased;
+  }
 }
 
 .no-scrollbar::-webkit-scrollbar {
@@ -11,4 +24,12 @@
 .no-scrollbar {
   -ms-overflow-style: none;
   scrollbar-width: none;
+}
+
+.glass {
+  @apply bg-white/70 backdrop-blur-xl border border-white/20;
+}
+
+.card-shadow {
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.04);
 }

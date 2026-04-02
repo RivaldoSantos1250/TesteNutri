@@ -10,7 +10,7 @@ import {
   ArrowRightLeft, AlertTriangle, CheckCircle2, 
   Utensils, Coffee, Sun, Moon, Star, Filter,
   TrendingUp, Info, Settings, Calendar, Camera, User,
-  Droplets
+  Droplets, GlassWater, Minus
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format, addDays, subDays, isSameDay } from 'date-fns';
@@ -21,31 +21,6 @@ import {
   Meal, DailyLog, UserGoals, UserProfile 
 } from './types';
 import { FOODS, UNIT_CONVERSIONS } from './data/foods';
-import { GoogleGenAI } from "@google/genai";
-import { auth, db } from './firebase';
-import { 
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area
-} from 'recharts';
-import { 
-  onAuthStateChanged, 
-  signInWithPopup, 
-  GoogleAuthProvider, 
-  signOut,
-  User as FirebaseUser,
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword
-} from 'firebase/auth';
-import { 
-  doc, 
-  getDoc, 
-  setDoc, 
-  collection, 
-  query, 
-  where, 
-  onSnapshot,
-  orderBy,
-  limit
-} from 'firebase/firestore';
 
 const MEAL_TYPES: MealType[] = ['café da manhã', 'almoço', 'lanche', 'jantar', 'ceia'];
 
@@ -55,35 +30,31 @@ const INITIAL_GOALS: UserGoals = {
   carbs: 200,
   fat: 65,
   tdee: 2000,
-  waterGoal: 2000
+  waterGoal: 2500,
+  goalType: 'maintain',
+  dietType: 'balanced'
 };
 
 export default function App() {
-  // --- Auth State ---
-  const [user, setUser] = useState<FirebaseUser | null>(null);
-  const [authLoading, setAuthLoading] = useState(true);
-  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-
   // --- State ---
   const [currentDate, setCurrentDate] = useState(new Date());
   const [logs, setLogs] = useState<DailyLog[]>([]);
   const [goals, setGoals] = useState<UserGoals>(INITIAL_GOALS);
   const [profile, setProfile] = useState<UserProfile>({
-    userId: '',
     name: '',
     photoUrl: '',
     weight: 70,
     height: 170,
     age: 30,
     gender: 'male',
-    activityLevel: 1.2
+    activityLevel: 1.2,
+    goalType: 'maintain',
+    dietType: 'balanced'
   });
   const [hasProfile, setHasProfile] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<Category | 'all'>('all');
-  const [activeTab, setActiveTab] = useState<'daily' | 'history' | 'shopping' | 'settings'>('daily');
+  const [activeTab, setActiveTab] = useState<'daily' | 'water' | 'history' | 'shopping' | 'settings'>('daily');
   const [isAddingFood, setIsAddingFood] = useState<{ mealType: MealType } | null>(null);
   const [selectedFoodForAmount, setSelectedFoodForAmount] = useState<Food | null>(null);
   const [amountInput, setAmountInput] = useState<number>(100);
@@ -96,146 +67,48 @@ export default function App() {
     lowFat: false,
     lactoseFree: false
   });
-  const [aiSuggestion, setAiSuggestion] = useState<string>('');
-  const [notifications, setNotifications] = useState<{ id: string; message: string }[]>([]);
+  const [manualCalories, setManualCalories] = useState<string>(INITIAL_GOALS.calories.toString());
+  const [aggressiveWarning, setAggressiveWarning] = useState<{ show: boolean, pendingCalories: number } | null>(null);
 
-  // --- Auth & Data Fetching ---
+  // --- Persistence ---
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      setUser(user);
-      if (user) {
-        // Fetch Profile
-        const profileDoc = await getDoc(doc(db, 'users', user.uid));
-        if (profileDoc.exists()) {
-          setProfile(profileDoc.data() as UserProfile);
-          setHasProfile(true);
-        } else {
-          setProfile(prev => ({ ...prev, userId: user.uid, name: user.displayName || '' }));
-          setHasProfile(false);
-        }
-
-        // Fetch Logs
-        const q = query(collection(db, 'logs'), where('userId', '==', user.uid));
-        const unsubscribeLogs = onSnapshot(q, (snapshot) => {
-          const fetchedLogs = snapshot.docs.map(doc => doc.data() as DailyLog);
-          setLogs(fetchedLogs);
-        });
-
-        return () => unsubscribeLogs();
-      } else {
-        setHasProfile(false);
-        setLogs([]);
-      }
-      setAuthLoading(false);
-    });
-
-    return () => unsubscribe();
+    const savedLogs = localStorage.getItem('nutriplan_logs');
+    const savedGoals = localStorage.getItem('nutriplan_goals');
+    const savedProfile = localStorage.getItem('nutriplan_profile');
+    const isSetupComplete = localStorage.getItem('nutriplan_setup_complete');
+    
+    if (savedLogs) setLogs(JSON.parse(savedLogs));
+    if (savedGoals) {
+      const parsedGoals = JSON.parse(savedGoals);
+      setGoals(parsedGoals);
+      setManualCalories(parsedGoals.calories.toString());
+    }
+    if (savedProfile) {
+      setProfile(JSON.parse(savedProfile));
+    }
+    if (isSetupComplete === 'true') {
+      setHasProfile(true);
+    }
   }, []);
 
-  // --- Handlers ---
-  const handleGoogleLogin = async () => {
-    try {
-      const provider = new GoogleAuthProvider();
-      await signInWithPopup(auth, provider);
-    } catch (error) {
-      console.error("Erro no login com Google:", error);
-      alert("Erro ao entrar com Google.");
-    }
-  };
+  useEffect(() => {
+    localStorage.setItem('nutriplan_logs', JSON.stringify(logs));
+  }, [logs]);
 
-  const handleEmailAuth = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      if (authMode === 'login') {
-        await signInWithEmailAndPassword(auth, email, password);
-      } else {
-        await createUserWithEmailAndPassword(auth, email, password);
-      }
-    } catch (error: any) {
-      console.error("Erro na autenticação:", error);
-      alert(error.message);
-    }
-  };
+  useEffect(() => {
+    localStorage.setItem('nutriplan_goals', JSON.stringify(goals));
+    setManualCalories(goals.calories.toString());
+  }, [goals]);
 
-  const handleLogout = async () => {
-    await signOut(auth);
-  };
-
-  const saveProfileAndCalculate = async () => {
-    if (!profile.name) {
-      alert("Por favor, insira seu nome.");
-      return;
-    }
-    if (!user) return;
-
-    const { weight, height, age, gender, activityLevel } = profile;
-    let bmr = 0;
-    if (gender === 'male') {
-      bmr = 10 * weight + 6.25 * height - 5 * age + 5;
-    } else {
-      bmr = 10 * weight + 6.25 * height - 5 * age - 161;
-    }
-    const tdee = Math.round(bmr * activityLevel);
-    const bmi = Number((weight / Math.pow(height / 100, 2)).toFixed(1));
-    
-    const newGoals = {
-      ...goals,
-      tdee,
-      calories: tdee,
-      protein: Math.round(weight * 2),
-      carbs: Math.round((tdee * 0.4) / 4),
-      fat: Math.round((tdee * 0.3) / 9),
-      waterGoal: Math.round(weight * 35), // 35ml per kg
-    };
-    
-    setGoals(newGoals);
-
-    const updatedProfile = { 
-      ...profile, 
-      userId: user.uid,
-      bmi,
-      bmr,
-      tdee,
-      reminders: profile.reminders || {
-        water: { enabled: true, interval: 60 },
-        meals: { enabled: true, times: ['08:00', '12:00', '16:00', '20:00'] },
-        protein: { enabled: true, target: 80 }
-      }
-    };
-    await setDoc(doc(db, 'users', user.uid), updatedProfile);
-    setProfile(updatedProfile);
-    setHasProfile(true);
-  };
-
-  const updateLogsInFirestore = async (newLogs: DailyLog[]) => {
-    if (!user) return;
-    const dateStr = format(currentDate, 'yyyy-MM-dd');
-    const log = newLogs.find(l => l.date === dateStr);
-    if (log) {
-      await setDoc(doc(db, 'logs', `${user.uid}_${dateStr}`), { ...log, userId: user.uid });
-    }
-  };
-
-  const addWater = (amount: number) => {
-    const dateStr = format(currentDate, 'yyyy-MM-dd');
-    const newLogs = [...logs];
-    let logIndex = newLogs.findIndex(l => l.date === dateStr);
-    
-    if (logIndex === -1) {
-      newLogs.push({ userId: user?.uid || '', date: dateStr, meals: [], waterIntake: amount });
-    } else {
-      newLogs[logIndex].waterIntake = (newLogs[logIndex].waterIntake || 0) + amount;
-    }
-    
-    setLogs(newLogs);
-    updateLogsInFirestore(newLogs);
-  };
+  useEffect(() => {
+    localStorage.setItem('nutriplan_profile', JSON.stringify(profile));
+  }, [profile]);
 
   // --- Derived Data ---
   const currentLog = useMemo(() => {
     const dateStr = format(currentDate, 'yyyy-MM-dd');
-    return logs.find(l => l.date === dateStr) || { userId: user?.uid || '', date: dateStr, meals: [], waterIntake: 0 };
-  }, [logs, currentDate, user]);
+    return logs.find(l => l.date === dateStr) || { date: dateStr, meals: [], water: 0 };
+  }, [logs, currentDate]);
 
   const totals = useMemo(() => {
     const res = { calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 };
@@ -255,42 +128,6 @@ export default function App() {
     return res;
   }, [currentLog]);
 
-  // --- Reminders Logic ---
-  useEffect(() => {
-    if (!profile.reminders) return;
-
-    const checkReminders = () => {
-      const now = new Date();
-      const timeStr = format(now, 'HH:mm');
-
-      // Meal Reminders
-      if (profile.reminders?.meals.enabled) {
-        if (profile.reminders.meals.times.includes(timeStr)) {
-          addNotification(`Hora de comer! 🍽️`);
-        }
-      }
-
-      // Protein Reminder (check at 8 PM)
-      if (profile.reminders?.protein.enabled && timeStr === '20:00') {
-        const proteinPercentage = (totals.protein / goals.protein) * 100;
-        if (proteinPercentage < profile.reminders.protein.target) {
-          addNotification(`Atenção! Você atingiu apenas ${Math.round(proteinPercentage)}% da sua meta de proteína. 🥩`);
-        }
-      }
-    };
-
-    const addNotification = (message: string) => {
-      const id = Math.random().toString(36).substr(2, 9);
-      setNotifications(prev => [...prev, { id, message }]);
-      setTimeout(() => {
-        setNotifications(prev => prev.filter(n => n.id !== id));
-      }, 5000);
-    };
-
-    const interval = setInterval(checkReminders, 60000); // Check every minute
-    return () => clearInterval(interval);
-  }, [profile.reminders, totals, goals]);
-
   const filteredFoods = useMemo(() => {
     return FOODS.filter(f => {
       const matchesSearch = f.name.toLowerCase().includes(searchQuery.toLowerCase());
@@ -305,95 +142,104 @@ export default function App() {
     });
   }, [searchQuery, selectedCategory, filters]);
 
-  // --- AI Suggestions ---
-  useEffect(() => {
-    const getAiFeedback = async () => {
-      if (!process.env.GEMINI_API_KEY) return;
-      
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-      const prompt = `
-        Com base na dieta de hoje:
-        Meta: ${goals.calories}kcal, ${goals.protein}g prot, ${goals.carbs}g carb, ${goals.fat}g gord.
-        Consumido: ${Math.round(totals.calories)}kcal, ${Math.round(totals.protein)}g prot, ${Math.round(totals.carbs)}g carb, ${Math.round(totals.fat)}g gord.
-        
-        Dê uma sugestão curta e motivadora em português (máximo 15 palavras). 
-        Exemplo: "Faltam 20g de proteína, tente adicionar ovos no jantar." ou "Você passou 300kcal, foque em fibras agora."
-      `;
+  // --- Autonomous Suggestions ---
+  const autonomousSuggestion = useMemo(() => {
+    const calorieDiff = goals.calories - totals.calories;
+    const proteinDiff = goals.protein - totals.protein;
+    const waterDiff = goals.waterGoal - (currentLog.water || 0);
+    const fatDiff = goals.fat - totals.fat;
 
-      try {
-        const response = await ai.models.generateContent({
-          model: "gemini-3-flash-preview",
-          contents: prompt,
-        });
-        setAiSuggestion(response.text || '');
-      } catch (e) {
-        console.error(e);
-      }
-    };
+    if (totals.calories === 0) return "Comece seu dia registrando sua primeira refeição!";
 
-    const timer = setTimeout(getAiFeedback, 2000);
-    return () => clearTimeout(timer);
-  }, [totals, goals]);
+    if (totals.calories > goals.calories + 100) {
+      return "Você excedeu sua meta calórica. Foque em vegetais e hidratação no restante do dia.";
+    }
+
+    if (proteinDiff > 30) {
+      return "Sua meta de proteína ainda está longe. Que tal adicionar ovos, frango ou iogurte?";
+    }
+
+    if (waterDiff > goals.waterGoal * 0.5) {
+      return "Lembre-se de beber água! A hidratação ajuda no controle do apetite e metabolismo.";
+    }
+
+    if (totals.carbs > goals.carbs + 20) {
+      return "Carboidratos um pouco acima da meta. Tente priorizar proteínas na próxima refeição.";
+    }
+
+    if (fatDiff > 15 && totals.calories > goals.calories * 0.7) {
+      return "Você ainda tem margem para gorduras boas. Que tal um pouco de abacate ou castanhas?";
+    }
+
+    if (calorieDiff > 200 && calorieDiff < 500) {
+      return "Quase lá! Você tem uma margem boa para um lanche saudável ou jantar leve.";
+    }
+
+    return "Ótimo progresso! Sua distribuição de nutrientes está equilibrada hoje.";
+  }, [totals, goals, currentLog.water]);
+
+  const timeOfDayTip = useMemo(() => {
+    const hour = new Date().getHours();
+    if (hour < 10) return { icon: <Coffee size={14} />, text: "Café da manhã rico em fibras ajuda na saciedade." };
+    if (hour < 14) return { icon: <Sun size={14} />, text: "Almoço equilibrado evita a sonolência da tarde." };
+    if (hour < 18) return { icon: <Utensils size={14} />, text: "Um lanche proteico agora evita exageros no jantar." };
+    return { icon: <Moon size={14} />, text: "Refeições leves à noite melhoram a qualidade do sono." };
+  }, []);
 
   // --- Handlers ---
   const addFoodToMeal = (foodId: string, amount: number, unit: Unit, mealType: MealType) => {
     const dateStr = format(currentDate, 'yyyy-MM-dd');
-    const newLogs = [...logs];
-    let logIndex = newLogs.findIndex(l => l.date === dateStr);
-    
-    if (logIndex === -1) {
-      newLogs.push({ userId: user?.uid || '', date: dateStr, meals: [], waterIntake: 0 });
-      logIndex = newLogs.length - 1;
-    }
-
-    const log = newLogs[logIndex];
-    let mealIndex = log.meals.findIndex(m => m.type === mealType);
-    
-    if (mealIndex === -1) {
-      log.meals.push({ type: mealType, items: [] });
-      mealIndex = log.meals.length - 1;
-    }
-
-    log.meals[mealIndex].items.push({ foodId, amount, unit });
-    setLogs(newLogs);
-    updateLogsInFirestore(newLogs);
+    setLogs(prevLogs => {
+      const logExists = prevLogs.some(l => l.date === dateStr);
+      if (!logExists) {
+        return [...prevLogs, { date: dateStr, meals: [{ type: mealType, items: [{ foodId, amount, unit }] }], water: 0 }];
+      }
+      return prevLogs.map(log => {
+        if (log.date !== dateStr) return log;
+        const mealExists = log.meals.some(m => m.type === mealType);
+        const newMeals = mealExists 
+          ? log.meals.map(m => m.type === mealType ? { ...m, items: [...m.items, { foodId, amount, unit }] } : m)
+          : [...log.meals, { type: mealType, items: [{ foodId, amount, unit }] }];
+        return { ...log, meals: newMeals };
+      });
+    });
     setIsAddingFood(null);
   };
 
   const removeFoodFromMeal = (mealType: MealType, itemIndex: number) => {
     const dateStr = format(currentDate, 'yyyy-MM-dd');
-    const newLogs = [...logs];
-    const logIndex = newLogs.findIndex(l => l.date === dateStr);
-    if (logIndex === -1) return;
-
-    const log = newLogs[logIndex];
-    const mealIndex = log.meals.findIndex(m => m.type === mealType);
-    if (mealIndex === -1) return;
-
-    log.meals[mealIndex].items.splice(itemIndex, 1);
-    setLogs(newLogs);
-    updateLogsInFirestore(newLogs);
+    setLogs(prevLogs => prevLogs.map(log => {
+      if (log.date !== dateStr) return log;
+      return {
+        ...log,
+        meals: log.meals.map(m => {
+          if (m.type !== mealType) return m;
+          const newItems = [...m.items];
+          newItems.splice(itemIndex, 1);
+          return { ...m, items: newItems };
+        })
+      };
+    }));
   };
 
   const substituteFood = (mealType: MealType, itemIndex: number, newFoodId: string) => {
     const dateStr = format(currentDate, 'yyyy-MM-dd');
-    const newLogs = [...logs];
-    const logIndex = newLogs.findIndex(l => l.date === dateStr);
-    if (logIndex === -1) return;
-
-    const log = newLogs[logIndex];
-    const mealIndex = log.meals.findIndex(m => m.type === mealType);
-    if (mealIndex === -1) return;
-
-    const item = log.meals[mealIndex].items[itemIndex];
-    item.foodId = newFoodId;
-    setLogs(newLogs);
-    updateLogsInFirestore(newLogs);
+    setLogs(prevLogs => prevLogs.map(log => {
+      if (log.date !== dateStr) return log;
+      return {
+        ...log,
+        meals: log.meals.map(m => {
+          if (m.type !== mealType) return m;
+          const newItems = [...m.items];
+          newItems[itemIndex] = { ...newItems[itemIndex], foodId: newFoodId };
+          return { ...m, items: newItems };
+        })
+      };
+    }));
     setIsSubstituting(null);
   };
 
   const duplicateMeal = (mealType: MealType) => {
-    // Logic to duplicate meal from previous day or another meal
     const yesterday = subDays(currentDate, 1);
     const dateStr = format(yesterday, 'yyyy-MM-dd');
     const prevLog = logs.find(l => l.date === dateStr);
@@ -403,25 +249,121 @@ export default function App() {
     if (!prevMeal) return;
 
     const todayStr = format(currentDate, 'yyyy-MM-dd');
-    const newLogs = [...logs];
-    let todayLogIndex = newLogs.findIndex(l => l.date === todayStr);
+    setLogs(prevLogs => {
+      const logExists = prevLogs.some(l => l.date === todayStr);
+      if (!logExists) {
+        return [...prevLogs, { date: todayStr, meals: [{ type: mealType, items: [...prevMeal.items] }], water: 0 }];
+      }
+      return prevLogs.map(log => {
+        if (log.date !== todayStr) return log;
+        const mealExists = log.meals.some(m => m.type === mealType);
+        const newMeals = mealExists 
+          ? log.meals.map(m => m.type === mealType ? { ...m, items: [...m.items, ...prevMeal.items] } : m)
+          : [...log.meals, { type: mealType, items: [...prevMeal.items] }];
+        return { ...log, meals: newMeals };
+      });
+    });
+  };
+
+  const saveProfileAndCalculate = () => {
+    if (!profile.name) {
+      alert("Por favor, insira seu nome.");
+      return;
+    }
+    calculateTDEE();
+    setHasProfile(true);
+    localStorage.setItem('nutriplan_setup_complete', 'true');
+  };
+
+  const updateWater = (amount: number) => {
+    const dateStr = format(currentDate, 'yyyy-MM-dd');
+    setLogs(prevLogs => {
+      const logExists = prevLogs.some(l => l.date === dateStr);
+      if (!logExists) {
+        return [...prevLogs, { date: dateStr, meals: [], water: Math.max(0, amount) }];
+      }
+      return prevLogs.map(log => {
+        if (log.date !== dateStr) return log;
+        return { ...log, water: Math.max(0, (log.water || 0) + amount) };
+      });
+    });
+  };
+
+  const calculateTDEE = () => {
+    const { weight, height, age, gender, activityLevel, goalType, dietType } = profile;
     
-    if (todayLogIndex === -1) {
-      newLogs.push({ userId: user?.uid || '', date: todayStr, meals: [], waterIntake: 0 });
-      todayLogIndex = newLogs.length - 1;
+    // Mifflin-St Jeor Equation
+    // Men: BMR = (10 × weight in kg) + (6.25 × height in cm) - (5 × age in years) + 5
+    // Women: BMR = (10 × weight in kg) + (6.25 × height in cm) - (5 × age in years) - 161
+    let bmr = (10 * weight) + (6.25 * height) - (5 * age);
+    bmr += (gender === 'male' ? 5 : -161);
+    
+    const tdee = Math.round(bmr * activityLevel);
+    
+    // Adjust calories based on goal
+    let calories = tdee;
+    if (goalType === 'lose') calories -= 500;
+    if (goalType === 'gain') calories += 500;
+
+    // Limitar calorias automaticamente
+    if (gender === 'female' && calories < 1300) {
+      calories = 1300;
+    }
+    if (gender === 'male' && calories < 1500) {
+      calories = 1500;
     }
 
-    const todayLog = newLogs[todayLogIndex];
-    let todayMealIndex = todayLog.meals.findIndex(m => m.type === mealType);
+    // Adjust macros based on diet type
+    let pRatio = 0.25, cRatio = 0.45, fRatio = 0.30;
     
-    if (todayMealIndex === -1) {
-      todayLog.meals.push({ type: mealType, items: [...prevMeal.items] });
-    } else {
-      todayLog.meals[todayMealIndex].items = [...todayLog.meals[todayMealIndex].items, ...prevMeal.items];
+    if (dietType === 'lowcarb') {
+      pRatio = 0.35; cRatio = 0.15; fRatio = 0.50;
+    } else if (dietType === 'highprotein') {
+      pRatio = 0.40; cRatio = 0.35; fRatio = 0.25;
     }
-    
-    setLogs(newLogs);
-    updateLogsInFirestore(newLogs);
+
+    setGoals({
+      ...goals,
+      tdee,
+      calories,
+      protein: Math.round((calories * pRatio) / 4),
+      carbs: Math.round((calories * cRatio) / 4),
+      fat: Math.round((calories * fRatio) / 9),
+      waterGoal: Math.round(weight * 35),
+      goalType,
+      dietType
+    });
+  };
+
+  const updateGoalsWithCalories = (calories: number) => {
+    let pRatio = 0.25, cRatio = 0.45, fRatio = 0.30;
+    if (profile.dietType === 'lowcarb') {
+      pRatio = 0.35; cRatio = 0.15; fRatio = 0.50;
+    } else if (profile.dietType === 'highprotein') {
+      pRatio = 0.40; cRatio = 0.35; fRatio = 0.25;
+    }
+    setGoals(prev => ({
+      ...prev,
+      calories,
+      protein: Math.round((calories * pRatio) / 4),
+      carbs: Math.round((calories * cRatio) / 4),
+      fat: Math.round((calories * fRatio) / 9),
+    }));
+  };
+
+  const handleManualCalorieBlur = () => {
+    const val = Number(manualCalories);
+    if (isNaN(val) || val <= 0) {
+      setManualCalories(goals.calories.toString());
+      return;
+    }
+
+    const limit = profile.gender === 'female' ? 1300 : 1500;
+    if (val < limit) {
+      setAggressiveWarning({ show: true, pendingCalories: val });
+    } else {
+      updateGoalsWithCalories(val);
+    }
   };
 
   const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -479,81 +421,26 @@ export default function App() {
     );
   };
 
+  const DarkProgressBar = ({ label, current, target, color, unit = 'g' }: { label: string, current: number, target: number, color: string, unit?: string }) => {
+    const percentage = Math.min((current / target) * 100, 100) || 0;
+    return (
+      <div className="flex flex-col gap-1.5">
+        <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">{label}</span>
+        <div className="h-1.5 w-full bg-white/10 rounded-full overflow-hidden">
+          <motion.div 
+            initial={{ width: 0 }}
+            animate={{ width: `${percentage}%` }}
+            className={cn("h-full rounded-full", color)}
+          />
+        </div>
+        <span className="text-xs font-bold text-white">{Math.round(current)}<span className="text-[10px] text-zinc-400 font-medium ml-0.5">{unit}</span></span>
+      </div>
+    );
+  };
+
   return (
     <div className="min-h-screen bg-[#F5F5F3] text-zinc-900 font-sans selection:bg-zinc-900 selection:text-white">
-      {authLoading ? (
-        <div className="min-h-screen flex items-center justify-center">
-          <div className="w-12 h-12 border-4 border-zinc-900 border-t-transparent rounded-full animate-spin" />
-        </div>
-      ) : !user ? (
-        <div className="min-h-screen flex items-center justify-center p-4">
-          <motion.div 
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="bg-white w-full max-w-md rounded-[40px] p-8 shadow-xl border border-zinc-100 space-y-8"
-          >
-            <div className="text-center space-y-2">
-              <div className="w-16 h-16 bg-zinc-900 rounded-3xl flex items-center justify-center text-white mx-auto mb-4">
-                <Utensils size={32} />
-              </div>
-              <h1 className="text-3xl font-black tracking-tighter">NutriPlan</h1>
-              <p className="text-zinc-500 text-sm">Sua jornada nutricional começa aqui.</p>
-            </div>
-
-            <form onSubmit={handleEmailAuth} className="space-y-4">
-              <div className="space-y-1">
-                <label className="text-[10px] font-bold uppercase text-zinc-400 tracking-widest">Email</label>
-                <input 
-                  type="email" 
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="w-full bg-zinc-50 border-none rounded-2xl p-4 text-sm focus:ring-2 focus:ring-zinc-900 outline-none"
-                  required
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-[10px] font-bold uppercase text-zinc-400 tracking-widest">Senha</label>
-                <input 
-                  type="password" 
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="w-full bg-zinc-50 border-none rounded-2xl p-4 text-sm focus:ring-2 focus:ring-zinc-900 outline-none"
-                  required
-                />
-              </div>
-              <button 
-                type="submit"
-                className="w-full bg-zinc-900 text-white font-bold py-4 rounded-2xl hover:bg-zinc-800 transition-all active:scale-[0.98]"
-              >
-                {authMode === 'login' ? 'Entrar' : 'Criar Conta'}
-              </button>
-            </form>
-
-            <div className="relative">
-              <div className="absolute inset-0 flex items-center"><span className="w-full border-t border-zinc-100" /></div>
-              <div className="relative flex justify-center text-xs uppercase"><span className="bg-white px-2 text-zinc-400">Ou</span></div>
-            </div>
-
-            <button 
-              onClick={handleGoogleLogin}
-              className="w-full bg-white border border-zinc-200 text-zinc-900 font-bold py-4 rounded-2xl hover:bg-zinc-50 transition-all flex items-center justify-center gap-2"
-            >
-              <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/layout/google.png" alt="Google" className="w-5 h-5" />
-              Entrar com Google
-            </button>
-
-            <p className="text-center text-sm text-zinc-500">
-              {authMode === 'login' ? 'Não tem uma conta?' : 'Já tem uma conta?'}
-              <button 
-                onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')}
-                className="ml-1 font-bold text-zinc-900 hover:underline"
-              >
-                {authMode === 'login' ? 'Cadastre-se' : 'Faça Login'}
-              </button>
-            </p>
-          </motion.div>
-        </div>
-      ) : !hasProfile ? (
+      {!hasProfile ? (
         <div className="min-h-screen flex items-center justify-center p-4">
           <motion.div 
             initial={{ opacity: 0, scale: 0.9 }}
@@ -578,19 +465,46 @@ export default function App() {
               <p className="text-zinc-500 text-sm">Vamos configurar seu perfil para calcular suas metas.</p>
             </div>
 
-            <div className="space-y-4">
-              <div className="space-y-1">
-                <label className="text-[10px] font-bold uppercase text-zinc-400 tracking-widest">Seu Nome</label>
-                <input 
-                  type="text" 
-                  placeholder="Como podemos te chamar?"
-                  value={profile.name}
-                  onChange={(e) => setProfile({...profile, name: e.target.value})}
-                  className="w-full bg-zinc-50 border-none rounded-2xl p-4 text-sm focus:ring-2 focus:ring-zinc-900 outline-none"
-                />
-              </div>
+              <div className="space-y-4">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold uppercase text-zinc-400 tracking-widest">Seu Nome</label>
+                  <input 
+                    type="text" 
+                    placeholder="Como podemos te chamar?"
+                    value={profile.name}
+                    onChange={(e) => setProfile({...profile, name: e.target.value})}
+                    className="w-full bg-zinc-50 border-none rounded-2xl p-4 text-sm focus:ring-2 focus:ring-zinc-900 outline-none"
+                  />
+                </div>
 
-              <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold uppercase text-zinc-400 tracking-widest">Objetivo</label>
+                    <select 
+                      value={profile.goalType}
+                      onChange={(e) => setProfile({...profile, goalType: e.target.value as any})}
+                      className="w-full bg-zinc-50 border-none rounded-2xl p-4 text-sm focus:ring-2 focus:ring-zinc-900 outline-none appearance-none"
+                    >
+                      <option value="lose">Perder Peso</option>
+                      <option value="maintain">Manter Peso</option>
+                      <option value="gain">Ganhar Massa</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold uppercase text-zinc-400 tracking-widest">Tipo de Dieta</label>
+                    <select 
+                      value={profile.dietType}
+                      onChange={(e) => setProfile({...profile, dietType: e.target.value as any})}
+                      className="w-full bg-zinc-50 border-none rounded-2xl p-4 text-sm focus:ring-2 focus:ring-zinc-900 outline-none appearance-none"
+                    >
+                      <option value="balanced">Equilibrada</option>
+                      <option value="lowcarb">Low Carb</option>
+                      <option value="highprotein">Alta Proteína</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1">
                   <label className="text-[10px] font-bold uppercase text-zinc-400 tracking-widest">Peso (kg)</label>
                   <input 
@@ -672,119 +586,108 @@ export default function App() {
               </div>
               <div className="flex flex-col">
                 <h1 className="font-bold text-sm tracking-tight leading-none">NutriPlan</h1>
-                <div className="flex items-center gap-2 mt-1">
-                  <span className="text-[10px] text-zinc-400 font-medium">🔥 {Math.round(totals.calories)} kcal</span>
-                  <span className="text-[10px] text-zinc-400 font-medium">💧 {currentLog.waterIntake || 0} / {goals.waterGoal} ml</span>
-                </div>
+                <span className="text-[10px] text-zinc-400 font-medium">Olá, {profile.name}</span>
               </div>
             </div>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-1 bg-zinc-50 rounded-full p-1 border border-zinc-200/50">
           <button 
             onClick={() => setCurrentDate(subDays(currentDate, 1))}
-            className="p-2 hover:bg-zinc-100 rounded-full transition-colors"
+            className="p-1.5 hover:bg-white hover:shadow-sm rounded-full transition-all text-zinc-500 hover:text-zinc-900"
           >
-            <ChevronLeft size={20} />
+            <ChevronLeft size={16} />
           </button>
-          <div className="flex flex-col items-center">
-            <span className="text-sm font-bold">
+          <div className="flex flex-col items-center min-w-[70px]">
+            <span className="text-xs font-bold tracking-tight">
               {isSameDay(currentDate, new Date()) ? 'Hoje' : format(currentDate, 'dd MMM', { locale: ptBR })}
-            </span>
-            <span className="text-[10px] text-zinc-500 uppercase tracking-tighter">
-              {format(currentDate, 'EEEE', { locale: ptBR })}
             </span>
           </div>
           <button 
             onClick={() => setCurrentDate(addDays(currentDate, 1))}
-            className="p-2 hover:bg-zinc-100 rounded-full transition-colors"
+            className="p-1.5 hover:bg-white hover:shadow-sm rounded-full transition-all text-zinc-500 hover:text-zinc-900"
           >
-            <ChevronRight size={20} />
+            <ChevronRight size={16} />
           </button>
         </div>
       </header>
 
       <main className="max-w-md mx-auto pb-24 px-4 pt-6">
         {activeTab === 'daily' && (
-          <div className="space-y-8">
+          <div className="space-y-6">
+            {/* Time of Day Tip */}
+            <motion.div 
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-100/50 p-4 rounded-[24px] flex items-center gap-4 shadow-sm"
+            >
+              <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-indigo-500 shadow-sm">
+                {timeOfDayTip.icon}
+              </div>
+              <div className="flex-1">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-400 mb-0.5">Dica do Momento</p>
+                <p className="text-xs font-medium text-indigo-900 leading-snug">{timeOfDayTip.text}</p>
+              </div>
+            </motion.div>
+
             {/* Dashboard Card */}
-            <section className="bg-white rounded-3xl p-6 shadow-sm border border-zinc-100 space-y-6">
-              <div className="flex justify-between items-start">
+            <section className="relative overflow-hidden bg-gradient-to-br from-zinc-900 to-zinc-800 text-white rounded-[32px] p-6 shadow-xl shadow-zinc-200/50 space-y-6">
+              {/* Decorative background elements */}
+              <div className="absolute top-0 right-0 -mr-8 -mt-8 w-32 h-32 rounded-full bg-white/5 blur-2xl pointer-events-none"></div>
+              <div className="absolute bottom-0 left-0 -ml-8 -mb-8 w-24 h-24 rounded-full bg-white/5 blur-xl pointer-events-none"></div>
+
+              <div className="relative z-10 flex justify-between items-start">
                 <div>
-                  <h2 className="text-3xl font-black tracking-tighter leading-none">
-                    {Math.round(totals.calories)} <span className="text-lg font-normal text-zinc-400">kcal</span>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-400 mb-1 flex items-center gap-1">⚡ Status do dia</p>
+                  <h2 className="text-4xl font-black tracking-tighter leading-none flex items-baseline gap-1">
+                    {Math.round(totals.calories)} <span className="text-lg font-medium text-zinc-400">/ {goals.calories}</span>
                   </h2>
-                  <p className="text-xs text-zinc-500 mt-1">Meta: {goals.calories} kcal</p>
+                  <p className="text-sm font-medium text-zinc-300 mt-2">
+                    {totals.calories > goals.calories 
+                      ? `Passou ${Math.round(totals.calories - goals.calories)} kcal` 
+                      : `Faltam ${Math.round(goals.calories - totals.calories)} kcal`}
+                  </p>
                 </div>
-                {totals.calories > goals.calories && (
-                  <div className="bg-red-50 text-red-600 px-3 py-1 rounded-full text-[10px] font-bold flex items-center gap-1 animate-pulse">
-                    <AlertTriangle size={12} /> LIMITE EXCEDIDO
-                  </div>
-                )}
+                <div className={cn(
+                  "px-3 py-1.5 rounded-full text-[10px] font-bold flex items-center gap-1.5 backdrop-blur-md border",
+                  totals.calories > goals.calories 
+                    ? "bg-red-500/20 text-red-300 border-red-500/30 animate-pulse" 
+                    : totals.calories >= goals.calories * 0.85
+                      ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30"
+                      : totals.calories > 0
+                        ? "bg-yellow-500/20 text-yellow-300 border-yellow-500/30"
+                        : "bg-zinc-500/20 text-zinc-300 border-zinc-500/30"
+                )}>
+                  {totals.calories > goals.calories ? '🚨 Acima do limite' : totals.calories >= goals.calories * 0.85 ? '🔥 Dentro da meta' : totals.calories > 0 ? '⚠️ Calorias baixas' : '🌱 Começando o dia'}
+                </div>
               </div>
 
-              <div className="grid grid-cols-1 gap-4">
-                <ProgressBar label="Proteína" current={totals.protein} target={goals.protein} color="bg-orange-500" />
-                <ProgressBar label="Carboidratos" current={totals.carbs} target={goals.carbs} color="bg-blue-500" />
-                <ProgressBar label="Gorduras" current={totals.fat} target={goals.fat} color="bg-yellow-500" />
+              <div className="relative z-10 grid grid-cols-4 gap-3 pt-4 border-t border-white/10">
+                <DarkProgressBar label="Proteína" current={totals.protein} target={goals.protein} color="bg-orange-400" />
+                <DarkProgressBar label="Carbos" current={totals.carbs} target={goals.carbs} color="bg-blue-400" />
+                <DarkProgressBar label="Gorduras" current={totals.fat} target={goals.fat} color="bg-yellow-400" />
+                <DarkProgressBar label="Água" current={currentLog.water || 0} target={goals.waterGoal} color="bg-cyan-400" unit="ml" />
               </div>
 
-              {aiSuggestion && (
+              {autonomousSuggestion && (
                 <motion.div 
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
-                  className="bg-zinc-50 border border-zinc-100 rounded-2xl p-4 flex gap-3 items-start"
+                  className="relative z-10 bg-white/10 backdrop-blur-md border border-white/10 rounded-2xl p-4 flex gap-3 items-start mt-2"
                 >
-                  <div className="w-8 h-8 bg-zinc-900 rounded-full flex-shrink-0 flex items-center justify-center text-white">
+                  <div className="w-8 h-8 bg-white/20 rounded-full flex-shrink-0 flex items-center justify-center text-white">
                     <Star size={14} fill="currentColor" />
                   </div>
-                  <p className="text-sm italic text-zinc-700 leading-tight">
-                    "{aiSuggestion}"
+                  <p className="text-sm font-medium text-zinc-100 leading-tight pt-1">
+                    {autonomousSuggestion}
                   </p>
                 </motion.div>
               )}
             </section>
 
             {/* Meals List */}
-            <div className="space-y-4">
-              {/* Hydration Card */}
-              <div className="bg-white rounded-3xl overflow-hidden border border-zinc-100 shadow-sm">
-                <div className="px-6 py-4 flex justify-between items-center bg-blue-50/30">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-blue-100 rounded-2xl flex items-center justify-center text-blue-500">
-                      <Droplets size={20} />
-                    </div>
-                    <div>
-                      <h3 className="font-bold text-sm">Hidratação</h3>
-                      <p className="text-[10px] text-blue-400 font-medium uppercase tracking-widest">Meta: {goals.waterGoal} ml</p>
-                    </div>
-                  </div>
-                  <div className="flex gap-2">
-                    <button 
-                      onClick={() => addWater(200)}
-                      className="px-3 py-1.5 bg-blue-500 text-white text-[10px] font-bold rounded-xl hover:bg-blue-600 transition-colors"
-                    >
-                      +200ml
-                    </button>
-                    <button 
-                      onClick={() => addWater(250)}
-                      className="px-3 py-1.5 bg-blue-500 text-white text-[10px] font-bold rounded-xl hover:bg-blue-600 transition-colors"
-                    >
-                      +250ml
-                    </button>
-                  </div>
-                </div>
-                <div className="px-6 py-4">
-                  <div className="flex justify-between text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-2">
-                    <span>Progresso</span>
-                    <span>{Math.round(((currentLog.waterIntake || 0) / goals.waterGoal) * 100)}%</span>
-                  </div>
-                  <div className="h-2 w-full bg-zinc-100 rounded-full overflow-hidden">
-                    <motion.div 
-                      initial={{ width: 0 }}
-                      animate={{ width: `${Math.min(((currentLog.waterIntake || 0) / goals.waterGoal) * 100), 100}%` }}
-                      className="h-full bg-blue-500 rounded-full"
-                    />
-                  </div>
-                </div>
+            <div className="space-y-5">
+              <div className="flex items-center justify-between px-1">
+                <h3 className="text-lg font-black tracking-tight">Refeições</h3>
+                <span className="text-xs font-bold text-zinc-400 uppercase tracking-widest">{currentLog.meals.length} Registros</span>
               </div>
 
               {MEAL_TYPES.map((type) => {
@@ -796,10 +699,15 @@ export default function App() {
                 }, 0) || 0;
 
                 return (
-                  <div key={type} className="bg-white rounded-3xl overflow-hidden border border-zinc-100 shadow-sm">
-                    <div className="px-6 py-4 flex justify-between items-center border-b border-zinc-50">
+                  <motion.div 
+                    key={type} 
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="bg-white rounded-[28px] overflow-hidden border border-zinc-100 shadow-sm hover:shadow-md transition-shadow"
+                  >
+                    <div className="px-5 py-4 flex justify-between items-center bg-zinc-50/50">
                       <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 bg-zinc-50 rounded-2xl flex items-center justify-center text-zinc-400">
+                        <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center text-zinc-900 shadow-sm border border-zinc-100">
                           {type === 'café da manhã' && <Coffee size={20} />}
                           {type === 'almoço' && <Sun size={20} />}
                           {type === 'lanche' && <Star size={20} />}
@@ -807,21 +715,21 @@ export default function App() {
                           {type === 'ceia' && <Moon size={20} />}
                         </div>
                         <div>
-                          <h3 className="font-bold capitalize text-sm">{type}</h3>
-                          <p className="text-[10px] text-zinc-400 font-medium uppercase tracking-widest">{Math.round(mealCalories)} kcal</p>
+                          <h3 className="font-bold capitalize text-base tracking-tight">{type}</h3>
+                          <p className="text-[11px] text-zinc-500 font-medium uppercase tracking-widest">{Math.round(mealCalories)} kcal</p>
                         </div>
                       </div>
                       <div className="flex gap-2">
                         <button 
                           onClick={() => duplicateMeal(type)}
-                          className="p-2 hover:bg-zinc-50 rounded-xl text-zinc-400 transition-colors"
+                          className="w-10 h-10 flex items-center justify-center hover:bg-white rounded-xl text-zinc-400 hover:text-zinc-900 transition-colors shadow-sm border border-transparent hover:border-zinc-200"
                           title="Duplicar de ontem"
                         >
-                          <Copy size={18} />
+                          <Copy size={16} />
                         </button>
                         <button 
                           onClick={() => setIsAddingFood({ mealType: type })}
-                          className="p-2 bg-zinc-900 text-white rounded-xl hover:bg-zinc-800 transition-colors"
+                          className="w-10 h-10 flex items-center justify-center bg-zinc-900 text-white rounded-xl hover:bg-zinc-800 transition-colors shadow-md shadow-zinc-200"
                         >
                           <Plus size={18} />
                         </button>
@@ -829,33 +737,33 @@ export default function App() {
                     </div>
                     
                     {meal && meal.items.length > 0 ? (
-                      <div className="divide-y divide-zinc-50">
+                      <div className="divide-y divide-zinc-50 px-2">
                         {meal.items.map((item, idx) => {
                           const food = FOODS.find(f => f.id === item.foodId);
                           if (!food) return null;
                           const cals = (food.calories * (item.amount * (UNIT_CONVERSIONS[item.unit] || 1)) / food.baseAmount);
                           return (
-                            <div key={idx} className="px-6 py-3 flex justify-between items-center group">
+                            <div key={idx} className="px-4 py-3.5 flex justify-between items-center group">
                               <div className="flex flex-col">
-                                <span className="text-sm font-medium">{food.name}</span>
-                                <span className="text-[10px] text-zinc-400">{item.amount} {item.unit} • {Math.round(cals)} kcal</span>
+                                <span className="text-sm font-bold text-zinc-800">{food.name}</span>
+                                <span className="text-xs text-zinc-500 font-medium">{item.amount} {item.unit} • <span className="text-zinc-400">{Math.round(cals)} kcal</span></span>
                               </div>
-                              <div className="flex items-center gap-3">
+                              <div className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                                 <button 
                                   onClick={() => {
                                     const category = food.category;
                                     setIsSubstituting({ mealType: type, itemIndex: idx, category });
                                   }}
-                                  className="text-zinc-300 hover:text-zinc-900 transition-colors"
+                                  className="p-2 text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 rounded-lg transition-colors"
                                   title="Trocar por equivalente"
                                 >
-                                  <ArrowRightLeft size={14} />
+                                  <ArrowRightLeft size={16} />
                                 </button>
                                 <button 
                                   onClick={() => removeFoodFromMeal(type, idx)}
-                                  className="text-zinc-300 hover:text-red-500 transition-colors"
+                                  className="p-2 text-zinc-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
                                 >
-                                  <Trash2 size={14} />
+                                  <Trash2 size={16} />
                                 </button>
                               </div>
                             </div>
@@ -863,13 +771,116 @@ export default function App() {
                         })}
                       </div>
                     ) : (
-                      <div className="px-6 py-8 text-center">
-                        <p className="text-xs text-zinc-400 italic">Nenhum alimento adicionado</p>
+                      <div className="px-6 py-6 text-center bg-white">
+                        <p className="text-xs font-medium text-zinc-400">Nenhum alimento registrado</p>
                       </div>
                     )}
-                  </div>
+                  </motion.div>
                 );
               })}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'water' && (
+          <div className="space-y-8 flex flex-col items-center justify-center min-h-[60vh]">
+            <div className="text-center space-y-2 mb-8">
+              <h2 className="text-3xl font-black tracking-tighter">Meta de Água</h2>
+              <p className="text-zinc-500 text-sm">Mantenha-se hidratado hoje</p>
+            </div>
+
+            <div className="relative w-64 h-64 flex items-center justify-center">
+              {/* Background Circle */}
+              <svg className="absolute inset-0 w-full h-full -rotate-90">
+                <circle
+                  cx="128"
+                  cy="128"
+                  r="110"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="12"
+                  className="text-zinc-100"
+                />
+                {/* Progress Circle */}
+                <motion.circle
+                  cx="128"
+                  cy="128"
+                  r="110"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="12"
+                  strokeDasharray={2 * Math.PI * 110}
+                  initial={{ strokeDashoffset: 2 * Math.PI * 110 }}
+                  animate={{ 
+                    strokeDashoffset: 2 * Math.PI * 110 * (1 - Math.min((currentLog.water || 0) / goals.waterGoal, 1)) 
+                  }}
+                  transition={{ duration: 1, ease: "easeOut" }}
+                  strokeLinecap="round"
+                  className="text-blue-500"
+                />
+              </svg>
+
+              {/* Inner Content */}
+              <div className="z-10 text-center">
+                <Droplets size={48} className="text-blue-500 mx-auto mb-2" fill="currentColor" />
+                <div className="text-4xl font-black tracking-tighter">
+                  {currentLog.water || 0}
+                  <span className="text-lg font-normal text-zinc-400 ml-1">ml</span>
+                </div>
+                <div className="text-[10px] font-bold uppercase text-zinc-400 tracking-widest mt-1">
+                  Meta: {goals.waterGoal}ml
+                </div>
+              </div>
+
+              {/* Water Wave Animation Effect */}
+              <div className="absolute inset-0 rounded-full overflow-hidden pointer-events-none opacity-10">
+                <motion.div
+                  animate={{
+                    y: [0, -10, 0],
+                    rotate: [0, 5, 0]
+                  }}
+                  transition={{
+                    duration: 4,
+                    repeat: Infinity,
+                    ease: "easeInOut"
+                  }}
+                  className="absolute bottom-0 left-0 right-0 h-[150%] bg-blue-500"
+                  style={{
+                    top: `${100 - Math.min(((currentLog.water || 0) / goals.waterGoal) * 100, 100)}%`
+                  }}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-4 w-full max-w-xs mt-8">
+              <button 
+                onClick={() => updateWater(-250)}
+                className="flex flex-col items-center gap-2 p-4 bg-white rounded-3xl border border-zinc-100 shadow-sm active:scale-95 transition-transform"
+              >
+                <Minus size={20} className="text-zinc-400" />
+                <span className="text-[10px] font-bold uppercase">250ml</span>
+              </button>
+              <button 
+                onClick={() => updateWater(250)}
+                className="flex flex-col items-center gap-2 p-4 bg-blue-500 text-white rounded-3xl shadow-lg shadow-blue-200 active:scale-95 transition-transform"
+              >
+                <Plus size={20} />
+                <span className="text-[10px] font-bold uppercase">250ml</span>
+              </button>
+              <button 
+                onClick={() => updateWater(500)}
+                className="flex flex-col items-center gap-2 p-4 bg-white rounded-3xl border border-zinc-100 shadow-sm active:scale-95 transition-transform"
+              >
+                <Plus size={20} className="text-blue-500" />
+                <span className="text-[10px] font-bold uppercase">500ml</span>
+              </button>
+            </div>
+
+            <div className="flex items-center gap-2 text-zinc-400 mt-4">
+              <GlassWater size={16} />
+              <span className="text-xs font-medium">
+                {Math.round((currentLog.water || 0) / 250)} copos de 250ml consumidos
+              </span>
             </div>
           </div>
         )}
@@ -879,52 +890,7 @@ export default function App() {
             <div className="bg-white rounded-3xl p-8 shadow-sm border border-zinc-100">
               <div className="flex items-center gap-3 mb-8">
                 <History className="text-zinc-900" />
-                <h2 className="text-2xl font-black tracking-tighter">Histórico e Evolução</h2>
-              </div>
-
-              {/* Evolution Chart */}
-              <div className="mb-8 p-6 bg-zinc-50 rounded-[32px] space-y-4">
-                <div className="flex items-center gap-2">
-                  <TrendingUp size={18} className="text-zinc-900" />
-                  <h3 className="font-bold text-sm uppercase tracking-widest text-zinc-900">Evolução Calórica (7 dias)</h3>
-                </div>
-                <div className="h-48 w-full">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={logs.slice(-7).sort((a,b) => a.date.localeCompare(b.date)).map(log => {
-                      const logTotals = log.meals.reduce((acc, meal) => {
-                        meal.items.forEach(item => {
-                          const food = FOODS.find(f => f.id === item.foodId);
-                          if (food) {
-                            const factor = (item.amount * (UNIT_CONVERSIONS[item.unit] || 1)) / food.baseAmount;
-                            acc.calories += food.calories * factor;
-                          }
-                        });
-                        return acc;
-                      }, { calories: 0 });
-                      return {
-                        date: format(new Date(log.date + 'T12:00:00'), 'dd/MM'),
-                        kcal: Math.round(logTotals.calories),
-                        meta: goals.calories
-                      };
-                    })}>
-                      <defs>
-                        <linearGradient id="colorKcal" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#18181b" stopOpacity={0.1}/>
-                          <stop offset="95%" stopColor="#18181b" stopOpacity={0}/>
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e4e4e7" />
-                      <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{fontSize: 10, fill: '#a1a1aa'}} />
-                      <YAxis hide />
-                      <Tooltip 
-                        contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
-                        itemStyle={{ fontSize: '12px', fontWeight: 'bold' }}
-                      />
-                      <Area type="monotone" dataKey="kcal" stroke="#18181b" strokeWidth={2} fillOpacity={1} fill="url(#colorKcal)" />
-                      <Line type="monotone" dataKey="meta" stroke="#ef4444" strokeDasharray="5 5" dot={false} />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                </div>
+                <h2 className="text-2xl font-black tracking-tighter">Histórico e Resumo</h2>
               </div>
 
               {/* Weekly Summary */}
@@ -1029,220 +995,247 @@ export default function App() {
 
         {activeTab === 'settings' && (
           <div className="space-y-6">
-            <div className="bg-white rounded-3xl p-8 shadow-sm border border-zinc-100">
-              <div className="flex items-center gap-3 mb-8">
-                <Settings className="text-zinc-900" />
-                <h2 className="text-2xl font-black tracking-tighter">Meu Perfil</h2>
+            <div className="bg-white rounded-[40px] p-8 shadow-sm border border-zinc-100">
+              <div className="flex items-center justify-between mb-8">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 bg-zinc-900 rounded-2xl flex items-center justify-center text-white">
+                    <Calculator size={24} />
+                  </div>
+                  <div>
+                    <h2 className="text-2xl font-black tracking-tighter">Calculadora de Metas</h2>
+                    <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest">Mifflin-St Jeor Equation</p>
+                  </div>
+                </div>
               </div>
 
-              <div className="space-y-6">
-                <div className="flex flex-col items-center gap-4 mb-4">
-                  <div className="relative w-24 h-24">
-                    <div className="w-24 h-24 bg-zinc-100 rounded-3xl flex items-center justify-center text-zinc-400 overflow-hidden border-2 border-zinc-100">
+              <div className="space-y-8">
+                {/* Profile Header in Settings */}
+                <div className="flex items-center gap-6 p-6 bg-zinc-50 rounded-[32px]">
+                  <div className="relative">
+                    <div className="w-20 h-20 bg-white rounded-3xl flex items-center justify-center text-zinc-300 overflow-hidden border-2 border-white shadow-sm">
                       {profile.photoUrl ? (
                         <img src={profile.photoUrl} alt="Profile" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                       ) : (
-                        <User size={48} />
+                        <User size={32} />
                       )}
                     </div>
-                    <label className="absolute -bottom-2 -right-2 w-10 h-10 bg-zinc-900 rounded-2xl flex items-center justify-center text-white cursor-pointer hover:bg-zinc-800 transition-colors shadow-lg">
-                      <Camera size={18} />
+                    <label className="absolute -bottom-1 -right-1 w-8 h-8 bg-zinc-900 rounded-xl flex items-center justify-center text-white cursor-pointer hover:bg-zinc-800 transition-colors shadow-lg border-2 border-zinc-50">
+                      <Camera size={14} />
                       <input type="file" accept="image/*" onChange={handlePhotoUpload} className="hidden" />
                     </label>
                   </div>
+                  <div>
+                    <h3 className="font-black text-xl tracking-tight">{profile.name || 'Seu Nome'}</h3>
+                    <p className="text-xs text-zinc-500">{profile.weight}kg • {profile.height}cm • {profile.age} anos</p>
+                  </div>
                 </div>
 
-                <div className="space-y-1">
-                  <label className="text-[10px] font-bold uppercase text-zinc-400 tracking-widest">Nome</label>
-                  <input 
-                    type="text" 
-                    value={profile.name}
-                    onChange={(e) => setProfile({...profile, name: e.target.value})}
-                    className="w-full bg-zinc-50 border-none rounded-2xl p-4 text-sm focus:ring-2 focus:ring-zinc-900 outline-none"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold uppercase text-zinc-400 tracking-widest">Peso (kg)</label>
+                <div className="grid grid-cols-1 gap-6">
+                  {/* Name Input */}
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold uppercase text-zinc-400 tracking-widest ml-1">Seu Nome</label>
                     <input 
-                      type="number" 
-                      value={profile.weight}
-                      onChange={(e) => setProfile({...profile, weight: Number(e.target.value)})}
-                      className="w-full bg-zinc-50 border-none rounded-2xl p-4 text-sm focus:ring-2 focus:ring-zinc-900 outline-none"
+                      type="text" 
+                      value={profile.name}
+                      onChange={(e) => setProfile({...profile, name: e.target.value})}
+                      className="w-full bg-zinc-50 border-2 border-transparent rounded-2xl p-4 text-sm font-bold focus:border-zinc-900 focus:bg-white outline-none transition-all"
+                      placeholder="Como podemos te chamar?"
                     />
                   </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold uppercase text-zinc-400 tracking-widest">Altura (cm)</label>
-                    <input 
-                      type="number" 
-                      value={profile.height}
-                      onChange={(e) => setProfile({...profile, height: Number(e.target.value)})}
-                      className="w-full bg-zinc-50 border-none rounded-2xl p-4 text-sm focus:ring-2 focus:ring-zinc-900 outline-none"
-                    />
+
+                  {/* Goal & Diet Selection */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold uppercase text-zinc-400 tracking-widest ml-1">Objetivo</label>
+                      <div className="relative">
+                        <select 
+                          value={profile.goalType}
+                          onChange={(e) => setProfile({...profile, goalType: e.target.value as any})}
+                          className="w-full bg-zinc-50 border-2 border-transparent rounded-2xl p-4 text-sm font-bold focus:border-zinc-900 focus:bg-white outline-none appearance-none transition-all"
+                        >
+                          <option value="lose">Perder Peso</option>
+                          <option value="maintain">Manter Peso</option>
+                          <option value="gain">Ganhar Massa</option>
+                        </select>
+                        <ChevronRight size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-zinc-400 rotate-90" />
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold uppercase text-zinc-400 tracking-widest ml-1">Tipo de Dieta</label>
+                      <div className="relative">
+                        <select 
+                          value={profile.dietType}
+                          onChange={(e) => setProfile({...profile, dietType: e.target.value as any})}
+                          className="w-full bg-zinc-50 border-2 border-transparent rounded-2xl p-4 text-sm font-bold focus:border-zinc-900 focus:bg-white outline-none appearance-none transition-all"
+                        >
+                          <option value="balanced">Equilibrada</option>
+                          <option value="lowcarb">Low Carb</option>
+                          <option value="highprotein">Alta Proteína</option>
+                        </select>
+                        <ChevronRight size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-zinc-400 rotate-90" />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Physical Data Inputs */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold uppercase text-zinc-400 tracking-widest ml-1">Peso (kg)</label>
+                      <input 
+                        type="number" 
+                        value={profile.weight}
+                        onChange={(e) => setProfile({...profile, weight: Number(e.target.value)})}
+                        className="w-full bg-zinc-50 border-2 border-transparent rounded-2xl p-4 text-sm font-bold focus:border-zinc-900 focus:bg-white outline-none transition-all"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold uppercase text-zinc-400 tracking-widest ml-1">Altura (cm)</label>
+                      <input 
+                        type="number" 
+                        value={profile.height}
+                        onChange={(e) => setProfile({...profile, height: Number(e.target.value)})}
+                        className="w-full bg-zinc-50 border-2 border-transparent rounded-2xl p-4 text-sm font-bold focus:border-zinc-900 focus:bg-white outline-none transition-all"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold uppercase text-zinc-400 tracking-widest ml-1">Idade</label>
+                      <input 
+                        type="number" 
+                        value={profile.age}
+                        onChange={(e) => setProfile({...profile, age: Number(e.target.value)})}
+                        className="w-full bg-zinc-50 border-2 border-transparent rounded-2xl p-4 text-sm font-bold focus:border-zinc-900 focus:bg-white outline-none transition-all"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold uppercase text-zinc-400 tracking-widest ml-1">Gênero</label>
+                      <div className="relative">
+                        <select 
+                          value={profile.gender}
+                          onChange={(e) => setProfile({...profile, gender: e.target.value as 'male' | 'female'})}
+                          className="w-full bg-zinc-50 border-2 border-transparent rounded-2xl p-4 text-sm font-bold focus:border-zinc-900 focus:bg-white outline-none appearance-none transition-all"
+                        >
+                          <option value="male">Masculino</option>
+                          <option value="female">Feminino</option>
+                        </select>
+                        <ChevronRight size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-zinc-400 rotate-90" />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold uppercase text-zinc-400 tracking-widest ml-1">Nível de Atividade</label>
+                    <div className="relative">
+                      <select 
+                        value={profile.activityLevel}
+                        onChange={(e) => setProfile({...profile, activityLevel: Number(e.target.value)})}
+                        className="w-full bg-zinc-50 border-2 border-transparent rounded-2xl p-4 text-sm font-bold focus:border-zinc-900 focus:bg-white outline-none appearance-none transition-all"
+                      >
+                        <option value={1.2}>Sedentário (pouco ou nenhum exercício)</option>
+                        <option value={1.375}>Levemente ativo (1-3 dias/semana)</option>
+                        <option value={1.55}>Moderadamente ativo (3-5 dias/semana)</option>
+                        <option value={1.725}>Muito ativo (6-7 dias/semana)</option>
+                        <option value={1.9}>Extremamente ativo (atleta, trabalho físico)</option>
+                      </select>
+                      <ChevronRight size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-zinc-400 rotate-90" />
+                    </div>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold uppercase text-zinc-400 tracking-widest">Idade</label>
-                    <input 
-                      type="number" 
-                      value={profile.age}
-                      onChange={(e) => setProfile({...profile, age: Number(e.target.value)})}
-                      className="w-full bg-zinc-50 border-none rounded-2xl p-4 text-sm focus:ring-2 focus:ring-zinc-900 outline-none"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold uppercase text-zinc-400 tracking-widest">Gênero</label>
-                    <select 
-                      value={profile.gender}
-                      onChange={(e) => setProfile({...profile, gender: e.target.value as 'male' | 'female'})}
-                      className="w-full bg-zinc-50 border-none rounded-2xl p-4 text-sm focus:ring-2 focus:ring-zinc-900 outline-none appearance-none"
-                    >
-                      <option value="male">Masculino</option>
-                      <option value="female">Feminino</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-[10px] font-bold uppercase text-zinc-400 tracking-widest">Nível de Atividade</label>
-                  <select 
-                    value={profile.activityLevel}
-                    onChange={(e) => setProfile({...profile, activityLevel: Number(e.target.value)})}
-                    className="w-full bg-zinc-50 border-none rounded-2xl p-4 text-sm focus:ring-2 focus:ring-zinc-900 outline-none appearance-none"
-                  >
-                    <option value={1.2}>Sedentário (pouco ou nenhum exercício)</option>
-                    <option value={1.375}>Levemente ativo (1-3 dias/semana)</option>
-                    <option value={1.55}>Moderadamente ativo (3-5 dias/semana)</option>
-                    <option value={1.725}>Muito ativo (6-7 dias/semana)</option>
-                    <option value={1.9}>Extremamente ativo (atleta, trabalho físico)</option>
-                  </select>
-                </div>
-
-                <div className="pt-4 space-y-4">
+                <div className="pt-4 space-y-6">
                   <button 
                     onClick={saveProfileAndCalculate}
-                    className="w-full bg-zinc-900 text-white font-bold py-4 rounded-2xl hover:bg-zinc-800 transition-all active:scale-[0.98]"
+                    className="w-full bg-zinc-900 text-white font-bold py-5 rounded-3xl hover:bg-zinc-800 transition-all active:scale-[0.98] shadow-lg shadow-zinc-200 flex items-center justify-center gap-2"
                   >
+                    <Save size={20} />
                     Atualizar Perfil e Metas
                   </button>
                   
-                  <div className="p-4 bg-zinc-50 rounded-2xl space-y-2">
-                    <h3 className="text-xs font-bold uppercase text-zinc-400">Metas Atuais</h3>
-                    <div className="grid grid-cols-2 gap-2 text-sm">
-                      <div className="flex justify-between"><span>Calorias:</span> <span className="font-bold">{goals.calories}</span></div>
-                      <div className="flex justify-between"><span>Proteína:</span> <span className="font-bold">{goals.protein}g</span></div>
-                      <div className="flex justify-between"><span>Carbos:</span> <span className="font-bold">{goals.carbs}g</span></div>
-                      <div className="flex justify-between"><span>Gordura:</span> <span className="font-bold">{goals.fat}g</span></div>
-                      <div className="flex justify-between"><span>Água:</span> <span className="font-bold">{goals.waterGoal}ml</span></div>
-                    </div>
-                  </div>
-
-                  <div className="pt-6 border-t border-zinc-100">
-                    <h3 className="text-xs font-bold uppercase text-zinc-400 mb-4 tracking-widest">Calculadora Nutricional</h3>
-                    <div className="grid grid-cols-3 gap-3">
-                      <div className="bg-zinc-50 p-4 rounded-2xl text-center">
-                        <p className="text-[10px] text-zinc-400 uppercase font-bold">IMC</p>
-                        <p className="text-lg font-black">{profile.bmi || '--'}</p>
-                        <p className="text-[8px] text-zinc-500 mt-1">
-                          {profile.bmi ? (
-                            profile.bmi < 18.5 ? 'Abaixo' : 
-                            profile.bmi < 25 ? 'Normal' : 
-                            profile.bmi < 30 ? 'Sobrepeso' : 'Obesidade'
-                          ) : ''}
-                        </p>
+                  {/* Macro Distribution Visualization */}
+                  <div className="p-8 bg-zinc-900 text-white rounded-[40px] space-y-8 shadow-2xl shadow-zinc-300">
+                    <div className="flex justify-between items-end">
+                      <div>
+                        <h3 className="text-xs font-bold uppercase text-zinc-400 tracking-widest mb-1">Meta Diária</h3>
+                        <p className="text-4xl font-black tracking-tighter">{goals.calories} <span className="text-lg font-normal text-zinc-500">kcal</span></p>
                       </div>
-                      <div className="bg-zinc-50 p-4 rounded-2xl text-center">
-                        <p className="text-[10px] text-zinc-400 uppercase font-bold">TMB</p>
-                        <p className="text-lg font-black">{profile.bmr || '--'}</p>
-                        <p className="text-[8px] text-zinc-500 mt-1">kcal/dia</p>
-                      </div>
-                      <div className="bg-zinc-50 p-4 rounded-2xl text-center">
-                        <p className="text-[10px] text-zinc-400 uppercase font-bold">Gasto</p>
-                        <p className="text-lg font-black">{profile.tdee || '--'}</p>
-                        <p className="text-[8px] text-zinc-500 mt-1">kcal/dia</p>
+                      <div className="text-right">
+                        <h3 className="text-xs font-bold uppercase text-zinc-400 tracking-widest mb-1">Água</h3>
+                        <p className="text-2xl font-black tracking-tighter">{goals.waterGoal} <span className="text-sm font-normal text-zinc-500">ml</span></p>
                       </div>
                     </div>
-                  </div>
 
-                  <div className="pt-6 border-t border-zinc-100">
-                    <h3 className="text-xs font-bold uppercase text-zinc-400 mb-4 tracking-widest">Lembretes Inteligentes</h3>
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-between p-4 bg-zinc-50 rounded-2xl">
-                        <div className="flex items-center gap-3">
-                          <Droplets size={18} className="text-blue-500" />
-                          <div>
-                            <p className="text-sm font-bold">Beber Água</p>
-                            <p className="text-[10px] text-zinc-400">A cada {profile.reminders?.water.interval} min</p>
-                          </div>
-                        </div>
-                        <input 
-                          type="checkbox" 
-                          checked={profile.reminders?.water.enabled}
-                          onChange={(e) => setProfile({
-                            ...profile, 
-                            reminders: {
-                              ...profile.reminders!,
-                              water: { ...profile.reminders!.water, enabled: e.target.checked }
-                            }
-                          })}
-                          className="w-5 h-5 accent-zinc-900"
+                    <div className="space-y-6">
+                      <div className="flex h-4 w-full rounded-full overflow-hidden bg-zinc-800">
+                        <motion.div 
+                          initial={{ width: 0 }}
+                          animate={{ width: `${(goals.protein * 4 / goals.calories) * 100}%` }}
+                          className="bg-orange-500 h-full"
+                        />
+                        <motion.div 
+                          initial={{ width: 0 }}
+                          animate={{ width: `${(goals.carbs * 4 / goals.calories) * 100}%` }}
+                          className="bg-blue-500 h-full"
+                        />
+                        <motion.div 
+                          initial={{ width: 0 }}
+                          animate={{ width: `${(goals.fat * 9 / goals.calories) * 100}%` }}
+                          className="bg-yellow-500 h-full"
                         />
                       </div>
-                      <div className="flex items-center justify-between p-4 bg-zinc-50 rounded-2xl">
-                        <div className="flex items-center gap-3">
-                          <Utensils size={18} className="text-orange-500" />
-                          <div>
-                            <p className="text-sm font-bold">Refeições</p>
-                            <p className="text-[10px] text-zinc-400">{profile.reminders?.meals.times.length || 0} horários definidos</p>
+
+                      <div className="grid grid-cols-3 gap-4">
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-1.5">
+                            <div className="w-2 h-2 rounded-full bg-orange-500" />
+                            <span className="text-[10px] font-bold uppercase text-zinc-400">Proteína</span>
                           </div>
+                          <p className="text-lg font-black">{goals.protein}g</p>
                         </div>
-                        <input 
-                          type="checkbox" 
-                          checked={profile.reminders?.meals.enabled}
-                          onChange={(e) => setProfile({
-                            ...profile, 
-                            reminders: {
-                              ...profile.reminders!,
-                              meals: { ...profile.reminders!.meals, enabled: e.target.checked }
-                            }
-                          })}
-                          className="w-5 h-5 accent-zinc-900"
-                        />
-                      </div>
-                      <div className="flex items-center justify-between p-4 bg-zinc-50 rounded-2xl">
-                        <div className="flex items-center gap-3">
-                          <TrendingUp size={18} className="text-red-500" />
-                          <div>
-                            <p className="text-sm font-bold">Meta de Proteína</p>
-                            <p className="text-[10px] text-zinc-400">Alerta se abaixo de {profile.reminders?.protein.target}%</p>
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-1.5">
+                            <div className="w-2 h-2 rounded-full bg-blue-500" />
+                            <span className="text-[10px] font-bold uppercase text-zinc-400">Carbos</span>
                           </div>
+                          <p className="text-lg font-black">{goals.carbs}g</p>
                         </div>
-                        <input 
-                          type="checkbox" 
-                          checked={profile.reminders?.protein.enabled}
-                          onChange={(e) => setProfile({
-                            ...profile, 
-                            reminders: {
-                              ...profile.reminders!,
-                              protein: { ...profile.reminders!.protein, enabled: e.target.checked }
-                            }
-                          })}
-                          className="w-5 h-5 accent-zinc-900"
-                        />
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-1.5">
+                            <div className="w-2 h-2 rounded-full bg-yellow-500" />
+                            <span className="text-[10px] font-bold uppercase text-zinc-400">Gordura</span>
+                          </div>
+                          <p className="text-lg font-black">{goals.fat}g</p>
+                        </div>
                       </div>
                     </div>
-                  </div>
 
-                  <div className="pt-6 border-t border-zinc-100">
-                    <button 
-                      onClick={handleLogout}
-                      className="w-full bg-red-50 text-red-600 font-bold py-4 rounded-2xl hover:bg-red-100 transition-all active:scale-[0.98]"
-                    >
-                      Sair da Conta
-                    </button>
+                    <div className="pt-6 border-t border-zinc-800 space-y-4">
+                      <h4 className="text-[10px] font-bold uppercase text-zinc-500 tracking-widest">Ajuste Fino Manual</h4>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-1">
+                          <label className="text-[10px] text-zinc-500 uppercase font-bold">Calorias</label>
+                          <input 
+                            type="number" 
+                            value={manualCalories}
+                            onChange={(e) => setManualCalories(e.target.value)}
+                            onBlur={handleManualCalorieBlur}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.currentTarget.blur();
+                              }
+                            }}
+                            className="w-full bg-zinc-800 border-none rounded-2xl p-3 text-sm font-bold focus:ring-1 focus:ring-white outline-none"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[10px] text-zinc-500 uppercase font-bold">Água (ml)</label>
+                          <input 
+                            type="number" 
+                            value={goals.waterGoal}
+                            onChange={(e) => setGoals({...goals, waterGoal: Number(e.target.value)})}
+                            className="w-full bg-zinc-800 border-none rounded-2xl p-3 text-sm font-bold focus:ring-1 focus:ring-white outline-none"
+                          />
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1251,23 +1244,55 @@ export default function App() {
         )}
       </main>
 
-      {/* Notifications Overlay */}
-      <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[100] w-full max-w-xs space-y-2 px-4">
-        <AnimatePresence>
-          {notifications.map(n => (
+      {/* Aggressive Goal Warning Modal */}
+      <AnimatePresence>
+        {aggressiveWarning && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
+          >
             <motion.div 
-              key={n.id}
-              initial={{ opacity: 0, y: -20, scale: 0.9 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.9 }}
-              className="bg-zinc-900 text-white p-4 rounded-2xl shadow-2xl flex items-center gap-3 border border-white/10"
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.9, y: 20 }}
+              className="bg-white w-full max-w-sm rounded-[32px] p-6 shadow-2xl"
             >
-              <Info size={18} className="text-blue-400" />
-              <p className="text-xs font-bold">{n.message}</p>
+              <div className="w-12 h-12 bg-red-100 text-red-500 rounded-2xl flex items-center justify-center mb-4">
+                <AlertTriangle size={24} />
+              </div>
+              <h3 className="text-xl font-black tracking-tight mb-2">Aviso Importante</h3>
+              <p className="text-sm text-zinc-600 mb-4">
+                <strong className="text-red-500">⚠️ Calorias muito baixas podem ser prejudiciais.</strong>
+                <br/><br/>
+                O limite recomendado para {profile.gender === 'female' ? 'mulheres' : 'homens'} é de {profile.gender === 'female' ? 1300 : 1500} kcal.
+                Você está escolhendo uma meta agressiva de {aggressiveWarning.pendingCalories} kcal. Deseja continuar?
+              </p>
+              <div className="flex gap-3">
+                <button 
+                  onClick={() => {
+                    setManualCalories(goals.calories.toString());
+                    setAggressiveWarning(null);
+                  }}
+                  className="flex-1 py-3 rounded-xl font-bold text-zinc-500 bg-zinc-100 hover:bg-zinc-200 transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  onClick={() => {
+                    updateGoalsWithCalories(aggressiveWarning.pendingCalories);
+                    setAggressiveWarning(null);
+                  }}
+                  className="flex-1 py-3 rounded-xl font-bold text-white bg-red-500 hover:bg-red-600 transition-colors shadow-lg shadow-red-200"
+                >
+                  Sim, continuar
+                </button>
+              </div>
             </motion.div>
-          ))}
-        </AnimatePresence>
-      </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Food Picker Modal */}
       <AnimatePresence>
@@ -1486,6 +1511,13 @@ export default function App() {
         >
           <Calendar size={24} />
           <span className="text-[10px] font-bold uppercase tracking-tighter">Diário</span>
+        </button>
+        <button 
+          onClick={() => setActiveTab('water')}
+          className={cn("flex flex-col items-center gap-1 transition-colors", activeTab === 'water' ? "text-zinc-900" : "text-zinc-300")}
+        >
+          <Droplets size={24} />
+          <span className="text-[10px] font-bold uppercase tracking-tighter">Água</span>
         </button>
         <button 
           onClick={() => setActiveTab('history')}
