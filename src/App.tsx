@@ -142,6 +142,56 @@ export default function App() {
     });
   }, [searchQuery, selectedCategory, filters]);
 
+  const streak = useMemo(() => {
+    let count = 0;
+    let checkDate = currentDate;
+    
+    const todayStr = format(checkDate, 'yyyy-MM-dd');
+    const todayLog = logs.find(l => l.date === todayStr);
+    const todayHasLogs = todayLog && todayLog.meals.some(m => m.items.length > 0);
+    
+    if (todayHasLogs) {
+      count++;
+    }
+    
+    checkDate = subDays(currentDate, 1);
+    while (true) {
+      const dateStr = format(checkDate, 'yyyy-MM-dd');
+      const log = logs.find(l => l.date === dateStr);
+      if (log && log.meals.some(m => m.items.length > 0)) {
+        count++;
+        checkDate = subDays(checkDate, 1);
+      } else {
+        break;
+      }
+    }
+    return count;
+  }, [logs, currentDate]);
+
+  const yesterdayComparison = useMemo(() => {
+    const yesterdayStr = format(subDays(currentDate, 1), 'yyyy-MM-dd');
+    const yesterdayLog = logs.find(l => l.date === yesterdayStr);
+    
+    if (!yesterdayLog || !yesterdayLog.meals.some(m => m.items.length > 0)) return null;
+
+    let yesterdayCalories = 0;
+    yesterdayLog.meals.forEach(meal => {
+      meal.items.forEach(item => {
+        const food = FOODS.find(f => f.id === item.foodId);
+        if (food) {
+          const factor = (item.amount * (UNIT_CONVERSIONS[item.unit] || 1)) / food.baseAmount;
+          yesterdayCalories += food.calories * factor;
+        }
+      });
+    });
+
+    const diff = totals.calories - yesterdayCalories;
+    return {
+      calories: yesterdayCalories,
+      diff: diff
+    };
+  }, [logs, currentDate, totals.calories]);
+
   // --- Autonomous Suggestions ---
   const autonomousSuggestion = useMemo(() => {
     const calorieDiff = goals.calories - totals.calories;
@@ -627,6 +677,41 @@ export default function App() {
                 <p className="text-xs font-medium text-indigo-900 leading-snug">{timeOfDayTip.text}</p>
               </div>
             </motion.div>
+
+            {/* Streak and Comparison */}
+            <div className="grid grid-cols-2 gap-3">
+              <motion.div 
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-orange-50 border border-orange-100 p-4 rounded-[24px] flex items-center gap-3 shadow-sm"
+              >
+                <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-orange-500 shadow-sm">
+                  <TrendingUp size={20} />
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-orange-400 mb-0.5">Ofensiva</p>
+                  <p className="text-sm font-bold text-orange-900 leading-snug">{streak} {streak === 1 ? 'dia' : 'dias'}</p>
+                </div>
+              </motion.div>
+
+              <motion.div 
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-blue-50 border border-blue-100 p-4 rounded-[24px] flex items-center gap-3 shadow-sm"
+              >
+                <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-blue-500 shadow-sm">
+                  <ArrowRightLeft size={20} />
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-blue-400 mb-0.5">vs Ontem</p>
+                  <p className="text-sm font-bold text-blue-900 leading-snug">
+                    {yesterdayComparison ? (
+                      yesterdayComparison.diff > 0 ? `+${Math.round(yesterdayComparison.diff)} kcal` : `${Math.round(yesterdayComparison.diff)} kcal`
+                    ) : 'Sem dados'}
+                  </p>
+                </div>
+              </motion.div>
+            </div>
 
             {/* Dashboard Card */}
             <section className="relative overflow-hidden bg-gradient-to-br from-zinc-900 to-zinc-800 text-white rounded-[32px] p-6 shadow-xl shadow-zinc-200/50 space-y-6">
